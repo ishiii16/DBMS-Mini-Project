@@ -10,6 +10,8 @@ Department of Computer Science and Engineering, PES University
 
 **Stack:** Next.js 14 (frontend + API routes) · PostgreSQL 18 (SQL) · pgvector 0.8 (vector database) · Python ETL · all-MiniLM-L6-v2 embeddings
 
+**Source code:** https://github.com/ishiii16/DBMS-Mini-Project
+
 ## 1. Problem Statement
 
 Mainstream music recommenders rank songs mainly by genre, artist, popularity and listening history. They do not capture *how a song feels*: two songs from different genres can share the same mood, tempo and emotional character, yet a genre/artist-based system will not connect them. Listeners also cannot ask for music the way they think about it – “calm songs for a rainy evening”, “energetic songs for working out”, “sad songs about missing someone”.
@@ -22,8 +24,9 @@ MoodTune solves this by storing each song’s audio characteristics in a relatio
 2. Store song and user-taste embeddings in a vector database (pgvector) and retrieve songs by cosine similarity using HNSW indexes.
 3. Provide four ways of discovering music: mood-based, song-based (“more like this”), natural-language search and personalised recommendations.
 4. Implement the business logic inside the database: stored functions, triggers, views and transactions.
-5. Build a role-based (listener / admin) Next.js web application that talks to the database only through an API layer, with secure authentication and no hard-coded secrets.
-6. Demonstrate correctness with integrity tests and API tests.
+5. Build a role-based (listener / restricted / admin) Next.js web application that talks to the database only through an API layer, with secure authentication and no hard-coded secrets.
+6. Control access at the database level with PostgreSQL roles and privileges (DCL: `CREATE ROLE`, `GRANT`, `REVOKE`, column-level privileges, role membership) and have the application obey them.
+7. Demonstrate correctness with integrity tests, API tests, browser tests and a stress test.
 
 ## 3. Scope
 
@@ -32,7 +35,8 @@ MoodTune solves this by storing each song’s audio characteristics in a relatio
 - Mood tagging on the valence × energy plane (Energetic, Calm, Tense, Sad), editable by admins.
 - Vector similarity: semantic text embeddings (384-d) + audio-feature vectors (8-d).
 - Listener features: sign-up/login, discovery, search, likes/dislikes, play logging, playlists, personal dashboard.
-- Admin features: analytics, mood-threshold editing with re-tagging, user management, catalogue import / re-embedding.
+- Admin features: analytics, mood-threshold editing with re-tagging, user management, catalogue import / re-embedding, a live read-only database explorer, and a **Login/Group Roles** page to inspect and change PostgreSQL privileges.
+- Three roles: **listener** (full use), **restricted** (read-only) and **admin**, each mapped to a PostgreSQL group role.
 
 **Out of scope**
 - Audio streaming (plays are logged, not streamed).
@@ -58,7 +62,11 @@ MoodTune solves this by storing each song’s audio characteristics in a relatio
 | FR12 | Edit mood thresholds and re-tag every song atomically | Admin | `PUT /api/admin/moods` |
 | FR13 | Manage users (change role, delete) | Admin | `/api/admin/users` |
 | FR14 | Import catalogue / regenerate embeddings | Admin | `/api/admin/etl` |
-| FR15 | Listeners cannot open admin pages or call admin APIs | System | `middleware.js`, `guard({ admin: true })` |
+| FR15 | Listeners cannot open admin pages or call admin APIs; the admin check reads the current role from the database, so a demotion takes effect at once | System | `middleware.js`, `guard({ admin: true })` |
+| FR16 | See who is what (each user’s PostgreSQL login role and group) and what each role may do; GRANT / REVOKE a privilege on a group; test an action as a user | Admin | `/admin/roles`, `/api/admin/privileges` |
+| FR17 | A **restricted** user can browse, search and get recommendations but cannot like, log plays or change playlists – enforced by asking PostgreSQL `has_table_privilege` before every write | Restricted | `requirePriv()` in `web/lib/auth.js`, group role `moodtune_restricted` |
+| FR18 | Live, read-only view of every table and view with row counts | Admin | `/admin/database`, `/api/admin/db` |
+| FR19 | Brute-force protection: an account locks for 15 minutes after 5 failed logins | System | `web/lib/ratelimit.js` |
 
 ## 5. ER Diagram
 
@@ -118,7 +126,7 @@ Primary keys are underlined as `PK`, foreign keys marked `FK → table`.
 | username | VARCHAR(50) | UNIQUE, NOT NULL | Display name (3–30 chars, validated in API) |
 | email | VARCHAR(255) | UNIQUE, NOT NULL | Login, stored lower-case |
 | password_hash | TEXT | NOT NULL | bcrypt hash (cost 10) – never plain text |
-| role | VARCHAR(10) | NOT NULL, DEFAULT 'listener', CHECK IN ('listener','admin') | Authorisation role |
+| role | VARCHAR(10) | NOT NULL, DEFAULT 'listener', CHECK IN ('listener','admin','restricted') (widened by ALTER) | Application role; mapped to PostgreSQL group role `moodtune_<role>` by trigger `users_db_role_aiud` |
 | created_at | TIMESTAMPTZ | NOT NULL, DEFAULT now() | Sign-up time |
 
 ### moods
@@ -209,9 +217,10 @@ All SQL is in `db/` and runs in order:
 | File | Contents |
 |---|---|
 | `01_schema.sql` | `CREATE EXTENSION`, `DROP TABLE … CASCADE`, `CREATE TABLE` ×13, PK/FK/UNIQUE/CHECK, `CREATE INDEX` ×7, seed moods |
-| `02_alter.sql` | `ALTER TABLE … ADD COLUMN` (songs.description, user_profiles.taste_audio, dislike_vec), `ALTER TABLE … ADD/DROP CONSTRAINT` |
+| `02_alter.sql` | `ALTER TABLE … ADD COLUMN` (songs.description, user_profiles.taste_audio, dislike_vec), `ALTER TABLE … ADD/DROP CONSTRAINT` (incl. the 3-value role CHECK) |
 | `03_features.sql` | Functions, triggers, views |
-| `04_tests.sql` | Integrity and feature tests T1–T11 |
+| `05_privileges.sql` | DCL: group roles, `GRANT` / `REVOKE` (incl. column-level), one login role per user kept in sync by a trigger, privilege views |
+| `04_tests.sql` | Integrity, feature and privilege tests T1–T16 (run after `05`) |
 
 ### 9.1 DDL (CREATE / ALTER / DROP)
 
@@ -254,6 +263,7 @@ Evidence (`EXPLAIN ANALYZE`, 20,000 songs): a top-10 semantic nearest-neighbour 
 | `feedback_taste_aiud` | AFTER INSERT/UPDATE/DELETE ON feedback | Calls `refresh_taste(user)` – recomputes taste, audio-taste and dislike vectors (skipped while the user row itself is being deleted) |
 | `feedback_liked_playlist_aiud` | AFTER INSERT/UPDATE/DELETE ON feedback | A like appends the song to the user’s “♥ Liked songs” playlist; un-liking or switching to dislike removes it and shifts later positions down |
 | `users_liked_playlist_ai` | AFTER INSERT ON users | Creates the new user’s “♥ Liked songs” playlist via `liked_playlist_id()` |
+| `users_db_role_aiud` | AFTER INSERT OR DELETE OR UPDATE OF role, username ON users | Creates the user’s PostgreSQL login role `mt_<username>` and puts it in the right group role; moves it when the role changes; drops it when the user is deleted (§9.8) |
 
 ### 9.4 Stored Functions
 
@@ -266,6 +276,10 @@ Evidence (`EXPLAIN ANALYZE`, 20,000 songs): a top-10 semantic nearest-neighbour 
 | `recommend(user, mood, n)` | Personalised ranking (see 9.7) |
 | `semantic_search(query_vec, user, mood, n)` | Natural-language discovery |
 | `similar_songs(seed, user, mood, n, audio_weight)` | “More like this”, blending text and audio similarity |
+| `user_db_role(username)` | Name of a user’s PostgreSQL login role: `mt_` followed by the lower-cased username |
+| `sync_user_db_role(user)` | Dynamic SQL (`CREATE ROLE`, `REVOKE`, `GRANT`) that keeps one login role per user in exactly one group |
+| `reset_default_privileges()` | Re-applies the default `GRANT`s for all three group roles |
+| `role_privileges(role)` | Privilege matrix for a role on every table/view, evaluated by `has_table_privilege` / `has_any_column_privilege` |
 
 ### 9.5 Views
 
@@ -276,6 +290,8 @@ Evidence (`EXPLAIN ANALYZE`, 20,000 songs): a top-10 semantic nearest-neighbour 
 | `v_user_top_moods` | Plays per mood per user (dashboard) |
 | `v_plays_by_mood_day` | Daily plays per mood (admin chart) |
 | `v_popular_songs` | Most-played songs with listeners and likes (admin) |
+| `v_user_db_roles` | Who is what: each user, their login role and the group roles PostgreSQL says they belong to |
+| `v_role_privileges` | Every MoodTune role × every table/view with SELECT / INSERT / UPDATE / DELETE (open it in pgAdmin to show privileges) |
 
 ### 9.6 Transactions
 
@@ -286,6 +302,8 @@ Evidence (`EXPLAIN ANALYZE`, 20,000 songs): a top-10 semantic nearest-neighbour 
 | Remove a song and renumber positions | `DELETE /api/playlists/[id]?song=` | Positions stay contiguous, UNIQUE never violated |
 | Edit mood thresholds + re-tag all songs | `PUT /api/admin/moods` | Thresholds and song tags always agree |
 | Load / re-embed the catalogue | `etl/pipeline.py` | 20,000 songs, artists, genres and vectors are committed all-or-nothing |
+| Sign-up / role change / delete user | trigger `users_db_role_aiud` | `CREATE ROLE`, `GRANT`, `REVOKE` and `DROP ROLE` are transactional in PostgreSQL, so a user row and its login role are created or removed together |
+| “Test as this user” on the roles page | `POST /api/admin/privileges` | `SET LOCAL ROLE` + the probe statement run inside a transaction that is always rolled back |
 
 ### 9.7 Vector Database Design (guideline §8)
 
@@ -303,6 +321,50 @@ Because the dataset has no lyrics, `description` is generated from the audio fea
 - *Natural-language search* – `semantic_search()`: top 100 by cosine distance to the query vector (HNSW), disliked songs removed, re-ranked by 0.9 · similarity + 0.1 · popularity.
 - *More like this* – `similar_songs()`: two HNSW shortlists of 400 (nearest by text and nearest by audio), merged and re-ranked by (1 − w) · text similarity + w · audio similarity, where the user sets w with a slider; already-heard and disliked songs removed.
 - *Personalised recommendations* – `recommend()`: shortlist = 300 nearest to the user’s taste vector (HNSW) ∪ 150 most popular ∪ 150 random songs in the mood (exploration, so the same chart hits do not dominate); score = 0.60 · taste similarity + 0.15 · audio-taste similarity + 0.15 · genre affinity (from history) + 0.10 · popularity − 0.25 · similarity to disliked songs. Cold start (no likes): popularity + genre affinity. For variety, the 60 best-scored songs are kept and 20 of them are picked at random (`ORDER BY random()`), then shown best-first – every mood click or **Shuffle** returns a fresh but still relevant list (the function is therefore declared `VOLATILE`).
+
+### 9.8 Roles and Privileges (DCL)
+
+Application roles alone (a word in `users.role` checked by code) are invisible to the database. MoodTune therefore mirrors them as real PostgreSQL roles, so the **database** decides who may do what, and the same roles can be inspected in pgAdmin under *Login/Group Roles*.
+
+**Group roles (NOLOGIN) – hold the privileges**
+
+| Group role | For | Privileges (`reset_default_privileges()`) |
+|---|---|---|
+| `moodtune_admin` | Admins | `SELECT, INSERT, UPDATE, DELETE` on every table `WITH GRANT OPTION`; sequences |
+| `moodtune_listener` | Listeners | `SELECT` on the catalogue (songs, artists, genres, moods, embeddings) and all views; `SELECT, INSERT, UPDATE, DELETE` on their activity tables (feedback, listening_events, playlists, playlist_songs); `SELECT, INSERT, UPDATE` on user_profiles; **column-level** `SELECT (user_id, username, role, created_at)` on users – never `email` or `password_hash` |
+| `moodtune_restricted` | Read-only users | The same `SELECT` privileges as a listener and **no** `INSERT`, `UPDATE` or `DELETE` anywhere |
+
+```sql
+CREATE ROLE moodtune_listener NOLOGIN;
+GRANT SELECT ON songs, artists, song_artists, genres, song_genres, moods, song_embeddings TO moodtune_listener;
+GRANT SELECT, INSERT, UPDATE, DELETE ON feedback, listening_events, playlists, playlist_songs TO moodtune_listener;
+GRANT SELECT (user_id, username, role, created_at) ON users TO moodtune_listener;   -- column-level privilege
+GRANT SELECT ON songs, feedback, playlists /* … */ TO moodtune_restricted;            -- read-only group
+```
+
+**Login roles – one per user.** Every account has a login role `mt_<username>` (for example `mt_ishika`) that is a member of exactly one group role and therefore *inherits* its privileges. Login roles have `CONNECTION LIMIT 0`: they identify users inside PostgreSQL and can be used with `SET ROLE`, but nobody can open a database connection with them.
+
+**Kept in sync by a trigger.** `users_db_role_aiud` (AFTER INSERT / DELETE / UPDATE OF role, username ON users) calls `sync_user_db_role()`, which uses dynamic SQL with safely quoted identifiers (`format('%I')`):
+
+```sql
+grp := CASE u.role WHEN 'admin' THEN 'moodtune_admin'
+                   WHEN 'restricted' THEN 'moodtune_restricted' ELSE 'moodtune_listener' END;
+EXECUTE format('CREATE ROLE %I LOGIN CONNECTION LIMIT 0', r);   -- only if missing
+EXECUTE format('REVOKE %I FROM %I', other_group, r);           -- leave any other MoodTune group
+EXECUTE format('GRANT %I TO %I', grp, r);                       -- join the right group
+```
+
+So a sign-up creates `mt_<username>` in `moodtune_listener`; an admin changing someone’s role moves the login role to the other group; deleting the user runs `DROP OWNED BY` and `DROP ROLE`. Because role DDL is transactional, a failed sign-up leaves no orphan role.
+
+**How the application obeys the privileges.** Before every write (like / dislike, play logging, creating, renaming or deleting playlists, adding or removing songs) the API calls `requirePriv(user, table, privilege)`, which asks PostgreSQL:
+
+```sql
+SELECT has_table_privilege(db_role, 'public.feedback', 'INSERT') FROM v_user_db_roles WHERE user_id = $1;
+```
+
+If PostgreSQL answers *false* the request is refused with HTTP 403 and a clear message (“Your account is read-only — … you can't like or dislike songs”). Revoking a privilege on the roles page therefore takes effect in the application immediately, and moving a user to `restricted` blocks them without logging them out.
+
+**Seeing who has what.** `v_user_db_roles` (who is what) and `v_role_privileges` (what each role may do) can be opened in pgAdmin; the admin page **Login/Group Roles** shows the same information, lets an admin `GRANT` / `REVOKE` a privilege on a group with one click (the executed SQL is logged), and can test an action as a given user. PostgreSQL privileges are additive, so a single person is restricted by moving them to a group with fewer privileges rather than by revoking from the individual.
 
 ## 10. Important Queries
 
@@ -386,6 +448,24 @@ INSERT INTO playlist_songs (playlist_id, song_id, position)
 SELECT $1, $2, COALESCE(MAX(position), 0) + 1 FROM playlist_songs WHERE playlist_id = $1;
 ```
 
+**Q8 – DCL and privilege inspection (roles page, `v_role_privileges`)**
+```sql
+-- change what a group may do (run by the roles page)
+REVOKE INSERT ON playlists FROM moodtune_listener;
+GRANT  INSERT ON playlists TO   moodtune_listener;
+-- who is what: login role and group membership from the system catalogue
+SELECT u.username, u.role, r.rolname AS db_role,
+       ARRAY(SELECT g.rolname FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid
+             WHERE m.member = r.oid) AS member_of
+FROM users u JOIN pg_roles r ON r.rolname = 'mt_' || lower(u.username);
+-- what a user may do, decided by PostgreSQL (inherited from their group)
+SELECT table_name, "select", "insert", "update", "delete"
+FROM v_role_privileges WHERE role = 'mt_arham';
+-- prove it: act as the user (rolled back)
+BEGIN; SET LOCAL ROLE mt_arham; EXPLAIN INSERT INTO feedback DEFAULT VALUES; ROLLBACK;
+-- ERROR: permission denied for table feedback
+```
+
 ## 11. System Architecture
 
 ![System architecture](images/architecture.png)
@@ -393,8 +473,9 @@ SELECT $1, $2, COALESCE(MAX(position), 0) + 1 FROM playlist_songs WHERE playlist
 *Figure 2 – System architecture. Mermaid source: `docs/images/arch.mmd`.*
 
 - **Presentation:** Next.js 14 React pages – Discover, Search, Song detail, Playlists, Dashboard, Admin.
-- **API layer:** Next.js route handlers under `/api/*`. Every protected handler is wrapped in `guard()`, which checks the JWT, enforces the admin role where required, and maps database errors (unique, FK, CHECK violations) to clean 4xx responses. All SQL is parameterised (`$1, $2 …`).
-- **Access control:** `middleware.js` redirects anonymous users to `/login` and listeners away from `/admin`.
+- **API layer:** Next.js route handlers under `/api/*`. Every protected handler is wrapped in `guard()`, which checks the JWT, enforces the admin role where required (reading the *current* role from the database), and maps database errors (unique, FK, CHECK, NOT NULL, range violations, malformed JSON) to clean 4xx responses. All SQL is parameterised (`$1, $2 …`).
+- **Access control (three layers):** `middleware.js` redirects anonymous users to `/login` and non-admins away from `/admin`; `guard()` protects every API; and `requirePriv()` asks PostgreSQL (`has_table_privilege`) whether the user’s login role may perform a write, so the database privileges of §9.8 are enforced in the app.
+- **Abuse protection:** login attempts are rate-limited (5 failures per account, 100 per IP per 15 minutes); sign-ups are limited per network.
 - **Database:** PostgreSQL 18 with pgvector 0.8.6 and pg_trgm. Business rules live in triggers, functions and views.
 - **Embedding:** Python `sentence-transformers` (ETL, batch) and `transformers.js` (query time), same model.
 - **Configuration:** `DATABASE_URL` and `JWT_SECRET` come only from `web/.env.local` (git-ignored); `.env.example` documents them. The Python scripts read the same file.
@@ -435,7 +516,28 @@ SELECT $1, $2, COALESCE(MAX(position), 0) + 1 FROM playlist_songs WHERE playlist
 *Figure 13 – A listener opening /admin is redirected with “That page is for admins only”.*
 
 ![Admin console](../screenshots/12_admin_console.png)
-*Figure 14 – Admin console: catalogue health, analytics, most-played songs, mood thresholds, users, import.*
+*Figure 14 – Admin console: catalogue health, analytics, most-played songs, mood thresholds, users (personal e-mail addresses masked), import.*
+
+![Restricted user](../screenshots/13_restricted_user_readonly.png)
+*Figure 15 – A restricted user (arham): “read-only” badge and banner; browsing, search and recommendations still work.*
+
+![Like refused](../screenshots/14_restricted_like_refused.png)
+*Figure 16 – The restricted user presses ♥: PostgreSQL has no INSERT privilege for `mt_arham`, so the API refuses with a clear message.*
+
+![Login/Group Roles](../screenshots/15_login_group_roles.png)
+*Figure 17 – Admin → Login/Group Roles: the three PostgreSQL group roles and their members.*
+
+![Who is what](../screenshots/16_who_is_what.png)
+*Figure 18 – Who is what: every user’s login role `mt_<username>` and the group role it belongs to (maintained by the trigger).*
+
+![Privilege matrix](../screenshots/17_privilege_matrix.png)
+*Figure 19 – What each group can do, as answered by `has_table_privilege`: ✔ granted, ◐ column-level only (users), ✕ not granted. Clicking a cell runs GRANT / REVOKE.*
+
+![Check a user's privileges](../screenshots/18_check_user_privileges.png)
+*Figure 20 – Checking a user: running `INSERT INTO feedback` as `mt_arham` returns “permission denied for table feedback”; below, the user’s effective privileges.*
+
+![Users with three roles](../screenshots/19_admin_users_roles.png)
+*Figure 21 – Admin Users table: listener / restricted / admin; changing the dropdown moves the user’s PostgreSQL role to the matching group.*
 
 ## 13. Testing Results
 
@@ -456,6 +558,11 @@ Full output: `docs/test_results.txt`.
 | T9 | `semantic_search` with a song’s own vector returns it first | PASS – similarity 1.000 |
 | T10 | A new account gets a “♥ Liked songs” playlist | PASS – created by trigger |
 | T11 | Like 3 songs, then dislike the first | PASS – playlist {1,2,3} → {2,3}, positions renumbered 1, 2 |
+| T12 | Every user has a login role in the right group | PASS – admin → `moodtune_admin`, arham → `moodtune_restricted`, others → `moodtune_listener` |
+| T13 | A listener can read `username` but not `password_hash` (column-level GRANT) | PASS – username returned; `SELECT password_hash` → permission denied for table users |
+| T14 | A listener cannot change mood thresholds; an admin can | PASS – listener: permission denied for table moods; admin: plan returned |
+| T15 | `REVOKE` takes effect at once; promoting a user moves their role | PASS – INSERT on playlists false after revoke; groups after promotion {moodtune_admin} (rolled back) |
+| T16 | Restricted user is read-only | PASS – `mt_arham` has SELECT only on all 13 tables; `INSERT INTO feedback` → permission denied |
 
 ### 13.2 API tests (run against the production build with curl)
 
@@ -476,8 +583,32 @@ Full output: `docs/test_results.txt`.
 | A13 | Admin sets role `superuser` | 400 (CHECK) | PASS – “Value out of allowed range” |
 | A14 | `GET /api/similar?seed=999999` | Empty, no crash | PASS |
 | A15 | Click the Calm card twice, then Shuffle (browser) | A different set of Calm songs each time | PASS |
+| A16 | Sign up a new user | Login role `mt_<username>` created in `moodtune_listener`; dropped again when the user is deleted | PASS |
+| A17 | Restricted user likes a song / logs a play / creates a playlist / adds to Liked songs | 403 with a read-only message | PASS – all four refused |
+| A18 | Restricted user opens recommendations, search, dashboard | 200 | PASS |
+| A19 | Admin switches arham to listener, then back to restricted (no re-login) | Like allowed, then refused again | PASS |
+| A20 | Admin revokes INSERT on playlists from `moodtune_listener`, tests as a listener, grants it back | Denied after revoke, allowed after grant | PASS |
+| A21 | Grant to `postgres`, object `users; DROP TABLE songs`, privilege `TRUNCATE` | Rejected (whitelists) | PASS – 400 for each |
+| A22 | Listener calls `/api/admin/privileges` | 403 | PASS |
 
-### 13.3 Performance (20,000 songs, laptop)
+**Browser tests (headless Microsoft Edge, Playwright).** A 47-step end-to-end run covering sign-up validation, discovery, likes, playlists, search, dashboard, access control and the admin console passed 47/47 with no page errors; separate runs for the Login/Group Roles page (15/15) and the restricted user (9/9) also passed.
+
+### 13.3 Stress and abuse testing (production build, 50 concurrent users)
+
+| Test | Result |
+|---|---|
+| 600 mixed reads (recommend, similar, search, dashboard, moods) at 50 concurrency | 0 errors, ≈ 245 requests/s, p95 latency ≈ 313 ms |
+| 300 concurrent writes (plays + likes firing the taste triggers) | 0 errors, p95 ≈ 144 ms |
+| 20 simultaneous sign-ups with the same username / the same e-mail | exactly 1 succeeds, 19 get a clear 409 – UNIQUE constraints hold |
+| 15 simultaneous creations of the same playlist | 1 created with all 20 songs, 14 rejected; rolled-back attempts leave no rows |
+| 25 concurrent adds to one playlist | unique positions (row lock + `UNIQUE(playlist_id, position)`) |
+| 30 simultaneous like/dislike flips on one song | no deadlocks or errors |
+| SQL injection in search and login, forged / `alg=none` JWTs, another user’s playlist | all blocked |
+| 30 parallel wrong-password logins | 5 reach bcrypt, 25 get 429; account locked 15 min; other accounts unaffected |
+
+The first stress run found four defects, all fixed and re-tested: duplicate playlist positions under concurrent adds (fixed with `SELECT … FOR UPDATE` and the UNIQUE constraint), malformed or wrongly-typed input causing HTTP 500 (now 400 with a clear message), unlimited password guessing (rate limiting) and – found by the browser tests – users who had rated songs could not be deleted because a trigger fired during the cascade (the trigger now skips users being deleted).
+
+### 13.4 Performance (20,000 songs, laptop)
 
 | Operation | Time |
 |---|---|
@@ -489,7 +620,7 @@ Full output: `docs/test_results.txt`.
 
 ## 14. Conclusion and Future Enhancements
 
-MoodTune shows how a relational database and a vector database complement each other. PostgreSQL enforces the structure and integrity of users, songs, playlists and feedback through keys, constraints, triggers and transactions. pgvector, inside the same database, finds songs by meaning and sound. Because both live in one engine, the ranking logic – taste similarity, audio similarity, genre affinity, popularity and dislike penalties – is written as stored functions that combine vector search with joins, aggregates and window functions. The result goes beyond CRUD: listeners can describe a feeling in plain English and get matching songs from any genre.
+MoodTune shows how a relational database and a vector database complement each other. PostgreSQL enforces the structure and integrity of users, songs, playlists and feedback through keys, constraints, triggers and transactions. pgvector, inside the same database, finds songs by meaning and sound. Because both live in one engine, the ranking logic – taste similarity, audio similarity, genre affinity, popularity and dislike penalties – is written as stored functions that combine vector search with joins, aggregates and window functions. The result goes beyond CRUD: listeners can describe a feeling in plain English and get matching songs from any genre. Access control is also enforced inside the database: every user is mirrored as a PostgreSQL login role in an admin, listener or read-only group, column-level privileges hide password hashes, and the application asks PostgreSQL before every write, so a `GRANT` or `REVOKE` changes what users can do immediately.
 
 **Future enhancements**
 1. Lyrics embeddings (licensed lyrics API) for true lyrical-theme similarity.
@@ -498,13 +629,16 @@ MoodTune shows how a relational database and a vector database complement each o
 4. Learning the ranking weights from like/dislike feedback instead of fixed weights.
 5. Audio preview playback through the Spotify Web API.
 6. Partitioning `listening_events` by month and materialised views for analytics at scale.
+7. Connect the web app as a least-privileged database account and run each request under the user’s own role (`SET ROLE`), plus row-level security so users can only ever read their own activity rows.
 
 ## 15. Individual Contribution
 
+Both members worked on the database and the application, as planned in the design review.
+
 | Member | Database work | Application work |
 |---|---|---|
-| Arham Mayur Burad | *[to be filled in by the team]* | *[to be filled in by the team]* |
-| Ishika Jain | *[to be filled in by the team]* | *[to be filled in by the team]* |
+| Arham Mayur Burad (PES2UG24AM025) | Schema, tables and constraints (`01_schema.sql`, `02_alter.sql`); triggers and stored functions (`03_features.sql`) | Login / sign-up and API routes; admin console (analytics, mood thresholds, user management) |
+| Ishika Jain (PES2UG24AM067) | Data cleaning and mood tagging (ETL); vector embeddings and similarity search; roles and privileges (`05_privileges.sql`) | Discover, search, recommendation and playlist pages; Login/Group Roles page and the restricted role; testing (database, API, browser and stress tests) and documentation |
 
 ## Appendix A – Guideline Compliance Checklist
 
@@ -516,15 +650,15 @@ MoodTune shows how a relational database and a vector database complement each o
 | 4 | ER diagram → relational schema; entities, attributes, PK, FK, relationships, constraints; vector data model | §5, §6, §8, §9.7 |
 | 5 | DDL: CREATE, ALTER, DROP, PK/FK, constraints, indexes, views | `01_schema.sql`, `02_alter.sql`, `03_features.sql` (§9.1–9.5) |
 | 6 | DML: INSERT, UPDATE, DELETE, SELECT; JOIN, GROUP BY, HAVING, ORDER BY, aggregates, subqueries | §10 Q1–Q7 |
-| 7 | ≥ 4 advanced SQL concepts + 1 vector | Transactions, views, stored functions, triggers, indexing, full-text search, window functions + vector similarity search (§9) |
+| 7 | ≥ 4 advanced SQL concepts + 1 vector | Transactions, views, stored functions, triggers, indexing, full-text search, window functions, roles & privileges (DCL) + vector similarity search (§9) |
 | 8 | Vector/semantic search explained (data, model, storage, metric, retrieval) | §9.7 |
 | 9 | Next.js web interface with forms, tables, search, filters, dashboards | §12 |
 | 10 | API layer; no hard-coded credentials; environment variables | `/api/*`, `.env.local`, `database_url()` in ETL (§11) |
-| 11 | Authentication; ≥ 2 roles | bcrypt + JWT; listener / admin (§4 FR1, FR15) |
-| 12 | Validation at database level; integrity | CHECK / UNIQUE / FK / NOT NULL, triggers; tests T1–T11 (§13.1) |
-| 13 | Security; no plain-text passwords or credentials | bcrypt hashes, parameterised SQL, httpOnly cookie, rate-limited login, secrets only in env |
+| 11 | Authentication; ≥ 2 roles | bcrypt + JWT; three roles – listener / restricted / admin – each mirrored as a PostgreSQL group role (§4 FR1, FR15–FR17, §9.8) |
+| 12 | Validation at database level; integrity | CHECK / UNIQUE / FK / NOT NULL, triggers, column-level privileges; tests T1–T16 (§13.1); concurrency tests (§13.3) |
+| 13 | Security; no plain-text passwords or credentials | bcrypt hashes, parameterised SQL, httpOnly cookie, rate-limited login, database privileges enforced by the app, secrets only in env |
 | 14 | Documentation contents | This document |
-| 15 | Git/GitHub, individual commits, README | `README.md`; repository to be pushed by the team |
+| 15 | Git/GitHub, individual commits, README | https://github.com/ishiii16/DBMS-Mini-Project with `README.md` (setup and run instructions); each member commits their own work |
 | 16 | Demonstration items | Covered by §1–§13 and the running app |
 | 17 | Originality | Own schema, ranking functions and generated-description embedding approach |
 | 18 | Level 3 expectation; justified database choice | §7, §9.7 |

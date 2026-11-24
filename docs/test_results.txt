@@ -1,6 +1,6 @@
 --- T1: rating of 5 must be rejected
 psql:db/04_tests.sql:4: ERROR:  new row for relation "feedback" violates check constraint "feedback_rating_check"
-DETAIL:  Failing row contains (1, 1, 5, 2026-11-20 08:48:47.904248+05:30).
+DETAIL:  Failing row contains (1, 1, 5, 2026-11-24 18:48:06.269065+05:30).
 --- T2: duplicate email must be rejected
 INSERT 0 1
 psql:db/04_tests.sql:7: ERROR:  duplicate key value violates unique constraint "users_email_key"
@@ -27,7 +27,7 @@ DELETE 1
 ROLLBACK
 --- T5: invalid mood thresholds (min >= max) must be rejected
 psql:db/04_tests.sql:20: ERROR:  new row for relation "moods" violates check constraint "moods_check"
-DETAIL:  Failing row contains (13, Bad, 0.800, 0.200, 0.000, 1.000).
+DETAIL:  Failing row contains (16, Bad, 0.800, 0.200, 0.000, 1.000).
 --- T6: mood trigger auto-tags a new song
 BEGIN
 INSERT 0 1
@@ -39,7 +39,7 @@ INSERT 0 1
 ROLLBACK
 --- T7: blank playlist name must be rejected (CHECK added with ALTER TABLE)
 psql:db/04_tests.sql:27: ERROR:  new row for relation "playlists" violates check constraint "playlists_name_not_blank"
-DETAIL:  Failing row contains (77, 1,    , null, 2026-11-20 08:48:47.928751+05:30, f).
+DETAIL:  Failing row contains (98, 1,    , null, 2026-11-24 18:48:06.335913+05:30, f).
 --- T8: a dislike fills dislike_vec via trigger feedback_taste_aiud -> refresh_taste()
 BEGIN
 INSERT 0 1
@@ -82,4 +82,75 @@ UPDATE 1
  after disliking the 1st | {2,3} | {1,2}
 (1 row)
 
+ROLLBACK
+--- T12: every MoodTune user has a login role in the right group (who is what)
+  username   |  app_role  |    db_role     |       member_of       
+-------------+------------+----------------+-----------------------
+ admin       | admin      | mt_admin       | {moodtune_admin}
+ ishika      | listener   | mt_ishika      | {moodtune_listener}
+ arham       | restricted | mt_arham       | {moodtune_restricted}
+ ishika.jain | listener   | mt_ishika.jain | {moodtune_listener}
+ ishika1     | listener   | mt_ishika1     | {moodtune_listener}
+(5 rows)
+
+--- T13: a listener may read usernames but NOT password hashes (column-level GRANT) -> must raise permission denied
+BEGIN
+SET
+ username 
+----------
+ admin
+(1 row)
+
+psql:db/04_tests.sql:62: ERROR:  permission denied for table users
+ROLLBACK
+--- T14: a listener may not change mood thresholds; an admin may (EXPLAIN only checks permissions)
+BEGIN
+SET
+psql:db/04_tests.sql:65: ERROR:  permission denied for table moods
+ROLLBACK
+BEGIN
+SET
+                         QUERY PLAN                         
+------------------------------------------------------------
+ Update on moods  (cost=0.00..1.04 rows=0 width=0)
+   ->  Seq Scan on moods  (cost=0.00..1.04 rows=4 width=12)
+(2 rows)
+
+ROLLBACK
+--- T15: REVOKE takes effect immediately; promoting a user moves their login role to moodtune_admin
+BEGIN
+REVOKE
+ ishika_can_insert_after_revoke 
+--------------------------------
+ f
+(1 row)
+
+UPDATE 1
+ ishika_groups_after_promotion 
+-------------------------------
+ {moodtune_admin}
+(1 row)
+
+ROLLBACK
+--- T16: restricted (read-only) user: arham may SELECT but has no INSERT/UPDATE/DELETE anywhere
+    table_name    | select | insert | update | delete 
+------------------+--------+--------+--------+--------
+ artists          | yes    | no     | no     | no
+ feedback         | yes    | no     | no     | no
+ genres           | yes    | no     | no     | no
+ listening_events | yes    | no     | no     | no
+ moods            | yes    | no     | no     | no
+ playlist_songs   | yes    | no     | no     | no
+ playlists        | yes    | no     | no     | no
+ song_artists     | yes    | no     | no     | no
+ song_embeddings  | yes    | no     | no     | no
+ song_genres      | yes    | no     | no     | no
+ songs            | yes    | no     | no     | no
+ user_profiles    | yes    | no     | no     | no
+ users            | cols   | no     | no     | no
+(13 rows)
+
+BEGIN
+SET
+psql:db/04_tests.sql:76: ERROR:  permission denied for table feedback
 ROLLBACK
