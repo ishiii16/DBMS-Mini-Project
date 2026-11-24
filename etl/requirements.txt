@@ -1,0 +1,4 @@
+pandas>=2.0
+psycopg[binary]>=3.1
+numpy>=1.26
+sentence-transformers>=2.7   # optional but recommended (all-MiniLM-L6-v2); falls back to hashing embedder if missing
