@@ -1,0 +1,12 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment: { POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}, POSTGRES_DB: moodmusic }
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/01_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+      - ./db/02_alter.sql:/docker-entrypoint-initdb.d/02_alter.sql
+      - ./db/03_features.sql:/docker-entrypoint-initdb.d/03_features.sql
+      - ./db/05_privileges.sql:/docker-entrypoint-initdb.d/05_privileges.sql
+volumes: { pgdata: {} }

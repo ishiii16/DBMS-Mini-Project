@@ -1,0 +1,8 @@
+.pgdata/
+web/node_modules/
+web/.next/
+web/.env.local
+__pycache__/
+*.dump
+data/dataset.csv
+web/.next-*/
