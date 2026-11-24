@@ -1,0 +1,24 @@
+flowchart TB
+  U["Browser<br/>(listener / admin)"] -->|"HTTP: pages + JSON API"| N
+  subgraph N["Next.js 14 app (web/)"]
+    direction TB
+    P["React pages<br/>Discover · Search · Song · Playlists<br/>Dashboard · Admin"]
+    M["middleware.js<br/>JWT cookie + role check"]
+    A["API route handlers /api/*<br/>guard() · input validation · tx()"]
+    E["lib/embed.js<br/>all-MiniLM-L6-v2 (transformers.js)"]
+    P --> A
+    M -.-> P
+    A --> E
+  end
+  A -->|"parameterised SQL (pg pool)<br/>DATABASE_URL from .env.local"| DB
+  subgraph DB["PostgreSQL 18"]
+    direction TB
+    R["Relational tables<br/>users · songs · artists · genres · moods<br/>listening_events · feedback · playlists"]
+    V["pgvector<br/>song_embeddings · user_profiles<br/>HNSW cosine indexes"]
+    F["Triggers · stored functions<br/>recommend() · semantic_search()<br/>similar_songs() · views"]
+    F --- R
+    F --- V
+  end
+  K["Kaggle Spotify CSV"] --> ETL["etl/pipeline.py<br/>clean → describe → embed (MiniLM) → COPY<br/>one transaction"]
+  ETL --> DB
+  A -->|"admin: run ETL"| ETL

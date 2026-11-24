@@ -1,0 +1,30 @@
+import sys, time
+from playwright.sync_api import sync_playwright
+OUT = sys.argv[1]; B = "http://localhost:3123"
+def shot(p, name, full=False): p.wait_for_timeout(700); p.screenshot(path=f"{OUT}/{name}.png", full_page=full); print("saved", name)
+def wait_songs(p): p.wait_for_selector(".songs .song:not(.head)", timeout=60000)
+with sync_playwright() as pw:
+    br = pw.chromium.launch(channel="msedge")
+    ctx = br.new_context(viewport={"width": 1366, "height": 900}, device_scale_factor=1)
+    p = ctx.new_page()
+    p.goto(B + "/login"); shot(p, "01_login")
+    p.goto(B + "/signup"); p.fill("input[type=email]", "not-an-email") if p.locator("input[type=email]").count() else None
+    shot(p, "02_signup")
+    p.goto(B + "/login"); p.fill("input[type=email]", "ishika@demo.com"); p.fill("input[type=password]", "password123")
+    p.keyboard.press("Enter"); p.wait_for_url(B + "/"); wait_songs(p); shot(p, "03_discover_recommended")
+    p.fill(".askbar input", "calm acoustic songs for a rainy evening"); p.click(".askbar button:has-text('Find songs')")
+    p.wait_for_selector("h3:has-text('Songs for')", timeout=60000); wait_songs(p); shot(p, "04_natural_language_search")
+    # save these results as a playlist (demo data for the playlists screenshot)
+    p.once("dialog", lambda d: d.accept("Rainy evening"))
+    p.click("button:has-text('Save as playlist')"); p.wait_for_selector(".toast"); shot(p, "05_save_playlist_toast")
+    p.click(".askbar button:has-text('Clear')"); p.click("button.mood.Calm"); p.wait_for_selector("h3:has-text('Calm picks')"); wait_songs(p)
+    shot(p, "06_mood_filter_calm")
+    p.goto(B + "/song/1"); p.wait_for_selector("text=🎧"); wait_songs(p); shot(p, "07_song_detail_similar", full=True)
+    p.goto(B + "/search"); p.fill(".searchbar input", "love"); p.wait_for_selector("text=results for"); shot(p, "08_keyword_search")
+    p.goto(B + "/playlists"); p.click(".pl:has-text('Rainy evening')"); wait_songs(p); shot(p, "09_playlists", full=True)
+    p.goto(B + "/dashboard"); p.wait_for_selector(".stats"); shot(p, "10_dashboard", full=True)
+    p.goto(B + "/admin"); p.wait_for_url(B + "/?denied=1"); p.wait_for_selector(".toast"); shot(p, "11_admin_blocked_for_listener")
+    ctx.clear_cookies()
+    p.goto(B + "/login"); p.fill("input[type=email]", "admin@demo.com"); p.fill("input[type=password]", "password123")
+    p.keyboard.press("Enter"); p.wait_for_url(B + "/"); p.goto(B + "/admin"); p.wait_for_selector("text=Most played songs"); shot(p, "12_admin_console", full=True)
+    br.close()

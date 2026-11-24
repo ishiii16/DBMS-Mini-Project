@@ -1,0 +1,83 @@
+erDiagram
+  users ||--o{ listening_events : "plays"
+  users ||--o{ feedback : "rates"
+  users ||--o{ playlists : "owns"
+  users ||--o| user_profiles : "has taste"
+  songs ||--o{ listening_events : "played in"
+  songs ||--o{ feedback : "rated in"
+  songs ||--o{ playlist_songs : "appears in"
+  playlists ||--o{ playlist_songs : "contains"
+  songs ||--o{ song_artists : ""
+  artists ||--o{ song_artists : "performs"
+  songs ||--o{ song_genres : ""
+  genres ||--o{ song_genres : "classifies"
+  moods |o--o{ songs : "tags"
+  moods |o--o{ playlists : "theme of"
+  moods |o--o{ listening_events : "context"
+  songs ||--|| song_embeddings : "embedded as"
+
+  users { int user_id PK
+    varchar username UK
+    varchar email UK
+    text password_hash
+    varchar role "listener|admin"
+    timestamptz created_at }
+  moods { int mood_id PK
+    varchar name UK
+    numeric valence_min
+    numeric valence_max
+    numeric energy_min
+    numeric energy_max }
+  songs { int song_id PK
+    varchar spotify_id UK
+    varchar title
+    varchar album_name
+    int duration_ms
+    int popularity
+    boolean explicit
+    real valence
+    real energy
+    real danceability
+    real acousticness
+    real instrumentalness
+    real speechiness
+    real liveness
+    real tempo
+    int mood_id FK
+    tsvector search_tsv
+    text description }
+  artists { int artist_id PK
+    varchar name UK }
+  song_artists { int song_id PK,FK
+    int artist_id PK,FK }
+  genres { int genre_id PK
+    varchar name UK }
+  song_genres { int song_id PK,FK
+    int genre_id PK,FK }
+  listening_events { bigint event_id PK
+    int user_id FK
+    int song_id FK
+    timestamptz played_at
+    int ms_played
+    int context_mood_id FK }
+  feedback { int user_id PK,FK
+    int song_id PK,FK
+    smallint rating "-1|1"
+    timestamptz rated_at }
+  playlists { int playlist_id PK
+    int user_id FK
+    varchar name
+    int mood_id FK
+    timestamptz created_at }
+  playlist_songs { int playlist_id PK,FK
+    int song_id PK,FK
+    int position }
+  song_embeddings { int song_id PK,FK
+    vector text_vec "384-d"
+    vector audio_vec "8-d"
+    varchar model }
+  user_profiles { int user_id PK,FK
+    vector taste_vec "384-d"
+    vector taste_audio "8-d"
+    vector dislike_vec "384-d"
+    timestamptz updated_at }

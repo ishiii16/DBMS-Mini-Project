@@ -1,0 +1,85 @@
+--- T1: rating of 5 must be rejected
+psql:db/04_tests.sql:4: ERROR:  new row for relation "feedback" violates check constraint "feedback_rating_check"
+DETAIL:  Failing row contains (1, 1, 5, 2026-11-20 08:48:47.904248+05:30).
+--- T2: duplicate email must be rejected
+INSERT 0 1
+psql:db/04_tests.sql:7: ERROR:  duplicate key value violates unique constraint "users_email_key"
+DETAIL:  Key (email)=(dup@test.com) already exists.
+DELETE 1
+--- T3: play pointing to a non-existent song must be rejected (FK)
+psql:db/04_tests.sql:10: ERROR:  insert or update on table "listening_events" violates foreign key constraint "listening_events_song_id_fkey"
+DETAIL:  Key (song_id)=(-999) is not present in table "songs".
+--- T4: deleting a playlist cascades to playlist_songs
+BEGIN
+INSERT 0 1
+INSERT 0 3
+ songs_before 
+--------------
+            3
+(1 row)
+
+DELETE 1
+ songs_after 
+-------------
+           0
+(1 row)
+
+ROLLBACK
+--- T5: invalid mood thresholds (min >= max) must be rejected
+psql:db/04_tests.sql:20: ERROR:  new row for relation "moods" violates check constraint "moods_check"
+DETAIL:  Failing row contains (13, Bad, 0.800, 0.200, 0.000, 1.000).
+--- T6: mood trigger auto-tags a new song
+BEGIN
+INSERT 0 1
+ title | auto_mood 
+-------+-----------
+ Test  | Energetic
+(1 row)
+
+ROLLBACK
+--- T7: blank playlist name must be rejected (CHECK added with ALTER TABLE)
+psql:db/04_tests.sql:27: ERROR:  new row for relation "playlists" violates check constraint "playlists_name_not_blank"
+DETAIL:  Failing row contains (77, 1,    , null, 2026-11-20 08:48:47.928751+05:30, f).
+--- T8: a dislike fills dislike_vec via trigger feedback_taste_aiud -> refresh_taste()
+BEGIN
+INSERT 0 1
+INSERT 0 1
+ no_likes_yet | dislike_profile_set 
+--------------+---------------------
+ t            | t
+(1 row)
+
+ROLLBACK
+--- T9: semantic_search with a song's own vector returns that song first (similarity ~1)
+ song_id |           title           | similarity 
+---------+---------------------------+------------
+       1 | Unholy (feat. Kim Petras) |      1.000
+     543 | This Town                 |      0.679
+    3587 | Let Me                    |      0.691
+(3 rows)
+
+--- T10: a new account automatically gets a "Liked songs" playlist (trigger users_liked_playlist_ai)
+BEGIN
+INSERT 0 1
+     name      | is_liked 
+---------------+----------
+ ♥ Liked songs | t
+(1 row)
+
+ROLLBACK
+--- T11: like adds to Liked songs, dislike removes it and positions stay 1..n (trigger feedback_liked_playlist_aiud)
+BEGIN
+INSERT 0 1
+INSERT 0 3
+     step      |  songs  | positions 
+---------------+---------+-----------
+ after 3 likes | {1,2,3} | {1,2,3}
+(1 row)
+
+UPDATE 1
+          step           | songs | positions 
+-------------------------+-------+-----------
+ after disliking the 1st | {2,3} | {1,2}
+(1 row)
+
+ROLLBACK
