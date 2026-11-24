@@ -11,8 +11,7 @@ Department of Computer Science and Engineering, PES University, Electronic City 
 | Course | Database Management Systems |
 |---|---|
 | Class / Section | 5-A, AIML |
-| Faculty | Dr. Nagasundari S |
-| Date of submission | November 2026 |
+| Date of submission | 20/11/2026 |
 
 **Stack:** Next.js 14 (frontend + API routes) · PostgreSQL 18 (SQL) · pgvector 0.8 (vector database) · Python ETL · all-MiniLM-L6-v2 embeddings
 
@@ -656,7 +655,7 @@ Both members worked on the database and the application, as planned in the desig
 6. J. A. Russell, “A circumplex model of affect”, *Journal of Personality and Social Psychology*, 39(6), 1980 – basis of the valence × energy mood model.
 7. Vercel, *Next.js 14 Documentation* – App Router, Route Handlers, Middleware. https://nextjs.org/docs
 8. Transformers.js (Hugging Face) – running the same embedding model in Node.js. https://huggingface.co/docs/transformers.js
-9. Dr. Nagasundari S, *DBMS Experiential Learning – Level 3 Project Requirements*, Department of CSE, PES University.
+9. Department of Computer Science and Engineering, PES University, *DBMS Experiential Learning – Level 3 Project Requirements*.
 
 ## Appendix A – Guideline Compliance Checklist
 
