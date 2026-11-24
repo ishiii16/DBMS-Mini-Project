@@ -1,12 +1,18 @@
 # MoodTune – A Semantic Music Discovery and Recommendation Engine
 
 **DBMS Experiential Learning – Level 3 Project**
-Department of Computer Science and Engineering, PES University
+Department of Computer Science and Engineering, PES University, Electronic City Campus
 
 | Team member | SRN |
 |---|---|
 | Arham Mayur Burad | PES2UG24AM025 |
 | Ishika Jain | PES2UG24AM067 |
+
+| Course | Database Management Systems |
+|---|---|
+| Class / Section | 5-A, AIML |
+| Faculty | Dr. Nagasundari S |
+| Date of submission | November 2026 |
 
 **Stack:** Next.js 14 (frontend + API routes) · PostgreSQL 18 (SQL) · pgvector 0.8 (vector database) · Python ETL · all-MiniLM-L6-v2 embeddings
 
@@ -606,7 +612,7 @@ Full output: `docs/test_results.txt`.
 | SQL injection in search and login, forged / `alg=none` JWTs, another user’s playlist | all blocked |
 | 30 parallel wrong-password logins | 5 reach bcrypt, 25 get 429; account locked 15 min; other accounts unaffected |
 
-The first stress run found four defects, all fixed and re-tested: duplicate playlist positions under concurrent adds (fixed with `SELECT … FOR UPDATE` and the UNIQUE constraint), malformed or wrongly-typed input causing HTTP 500 (now 400 with a clear message), unlimited password guessing (rate limiting) and – found by the browser tests – users who had rated songs could not be deleted because a trigger fired during the cascade (the trigger now skips users being deleted).
+These figures were measured before the per-write privilege check of §9.8 was added; that check adds one small indexed lookup to each write request. The first stress run found four defects, all fixed and re-tested: duplicate playlist positions under concurrent adds (fixed with `SELECT … FOR UPDATE` and the UNIQUE constraint), malformed or wrongly-typed input causing HTTP 500 (now 400 with a clear message), unlimited password guessing (rate limiting) and – found by the browser tests – users who had rated songs could not be deleted because a trigger fired during the cascade (the trigger now skips users being deleted).
 
 ### 13.4 Performance (20,000 songs, laptop)
 
@@ -639,6 +645,18 @@ Both members worked on the database and the application, as planned in the desig
 |---|---|---|
 | Arham Mayur Burad (PES2UG24AM025) | Schema, tables and constraints (`01_schema.sql`, `02_alter.sql`); triggers and stored functions (`03_features.sql`) | Login / sign-up and API routes; admin console (analytics, mood thresholds, user management) |
 | Ishika Jain (PES2UG24AM067) | Data cleaning and mood tagging (ETL); vector embeddings and similarity search; roles and privileges (`05_privileges.sql`) | Discover, search, recommendation and playlist pages; Login/Group Roles page and the restricted role; testing (database, API, browser and stress tests) and documentation |
+
+## 16. References
+
+1. M. Pandya, “Spotify Tracks Dataset”, Kaggle. https://www.kaggle.com/datasets/maharshipandya/-spotify-tracks-dataset
+2. PostgreSQL Global Development Group, *PostgreSQL 18 Documentation* – Data Definition, Privileges, Database Roles, Triggers, Full Text Search. https://www.postgresql.org/docs/18/
+3. pgvector – Open-source vector similarity search for Postgres (HNSW indexes, cosine distance, iterative index scans). https://github.com/pgvector/pgvector
+4. N. Reimers and I. Gurevych, “Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks”, EMNLP 2019; model *sentence-transformers/all-MiniLM-L6-v2*. https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
+5. Y. A. Malkov and D. A. Yashunin, “Efficient and robust approximate nearest neighbor search using Hierarchical Navigable Small World graphs”, IEEE TPAMI, 2020.
+6. J. A. Russell, “A circumplex model of affect”, *Journal of Personality and Social Psychology*, 39(6), 1980 – basis of the valence × energy mood model.
+7. Vercel, *Next.js 14 Documentation* – App Router, Route Handlers, Middleware. https://nextjs.org/docs
+8. Transformers.js (Hugging Face) – running the same embedding model in Node.js. https://huggingface.co/docs/transformers.js
+9. Dr. Nagasundari S, *DBMS Experiential Learning – Level 3 Project Requirements*, Department of CSE, PES University.
 
 ## Appendix A – Guideline Compliance Checklist
 
